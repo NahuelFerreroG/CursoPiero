@@ -1,0 +1,1 @@
+public record class Candidato(int id, string nombre, string apellido, string partido);
