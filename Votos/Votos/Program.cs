@@ -6,64 +6,94 @@ using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(args);  
+
+switch (builder.Environment.EnvironmentName)
+{
+    case "Development":
+        builder.Services.AddDbContext<VotoDb>(opt => opt.UseInMemoryDatabase("Votos"));
+        builder.Services.AddDatabaseDeveloperPageExceptionFilter();
+        break;
+    case "Homologation":
+        var connection = new SqliteConnection("DataSource=votos.db");
+        connection.Open();  
+        builder.Services.AddDbContext<VotoDb>(opt => opt.UseSqlite(connection));
+        break;
+    case "Production":
+    default:
+        throw new NotImplementedException();
+}
+
 var app = builder.Build();
-
-// if (builder.Environment.EnvironmentName != "Development")
-// {
-//     var connection = new SqliteConnection("DataSource=votos.db");
-//     connection.Open();
-//     builder.Services.AddDbContext<VotoDb>(opt => opt.UseSqlite(connection));
-// }
-// else
-// {
-//     builder.Services.AddDbContext<VotoDb>(opt => opt.UseInMemoryDatabase("Votos"));
-// }
-
-// builder.Services.AddDatabaseDeveloperPageExceptionFilter();
-
-List<Voto> _listaDeVotos = new List<Voto>();
-
 var votos = app.MapGroup("/votos");
-int contador = 0;
 
-votos.MapGet("/", () => obtenerVotos(_listaDeVotos));
-votos.MapPost("/", (Voto nuevoVoto) => crearVoto(nuevoVoto, _listaDeVotos, ref contador));
+HttpClient client = new HttpClient();
 
-static IResult obtenerVotos(List<Voto> lista)
+votos.MapGet("/", obtenerVotos);
+votos.MapPost("/", async ([FromBody] Voto nuevoVoto, VotoDb db) => {
+    var request = new HttpRequestMessage(HttpMethod.Get, new Uri($"http://localhost:5206/votantes/{nuevoVoto.VotanteId}"));
+    request.Headers.Accept.Clear();
+    var response = await client.SendAsync(request, CancellationToken.None);
+    response.EnsureSuccessStatusCode();
+    var votante = JsonSerializer.Deserialize<Votante>(await response.Content.ReadAsStringAsync());
+    DateTime FechaNacimiento = DateTime.ParseExact(votante.FechaNacimiento, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+    if ((DateTime.Now.Year - FechaNacimiento.Year) > 16)
+    {
+        db.Votos.Add(nuevoVoto);
+        db.SaveChanges();
+        return TypedResults.Ok(nuevoVoto.Id);
+    }
+    else 
+    {
+        return Results.Ok("Es menor y no puede votar");
+    }
+});
+
+static async Task<IResult> obtenerVotos(VotoDb db)
 {
-    return TypedResults.Ok(lista);
-}
-static IResult crearVoto([FromBody] Voto nuevoVoto, List<Voto> lista, ref int contador)
-{
-    contador++;
-    nuevoVoto.Id = contador;
-    lista.Add(nuevoVoto);
-
-    return TypedResults.Ok(nuevoVoto);
+    return TypedResults.Ok(await db.Votos.ToListAsync());
 }
 
+/* static async Task<IResult> crearVoto([FromBody] Voto nuevoVoto, VotoDb db)
+{   
+
+        await using Stream stream = await client.GetStreamAsync($"http://localhost:5206/votantes/{nuevoVoto.Id}");
+    
+        Votante? votante = await JsonSerializer.DeserializeAsync<Votante>(stream);
+
+        if(votante is null) return TypedResults.NotFound("Votante no encontrado o mal cargado");
+        DateTime FechaNacimiento = DateTime.ParseExact(votante.FechaNacimiento, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+        int edad = DateTime.Now.Year - FechaNacimiento.Year;
+        if(edad>= 16)
+        {
+            db.Votos.Add(nuevoVoto);
+            await db.SaveChangesAsync();
+            return TypedResults.Created(nuevoVoto.Id.ToString());
+        }
+        return TypedResults.Conflict("Votante menor de edad");
+} */
 
 app.Run();
 
 public class Voto
 {
-    public int Id {get; set;}
-    public required int IdVotante {get; set;}
-    public int? IdCandidato {get; set;}
+    public int Id { get; set; }
+    public int VotanteId { get; set; }
+    public int? CandidatoId { get; set; }
+}
+
+public class VotoDb : DbContext
+{
+    public VotoDb(DbContextOptions<VotoDb> options) : base(options) 
+    {
+        Database.EnsureCreated();
+    }
+    public DbSet<Voto> Votos => Set<Voto>();
 }
 
 public class Votante
 {
     [JsonPropertyName("id")] public int Id { get; set; }
-    [JsonPropertyName("fechaNacimiento")] public required string FechaNacimiento { get; set; }
-}
+    [JsonPropertyName("fechaNacimiento")] public required string FechaNacimiento { get; set; } 
 
-public class VotoDb : DbContext
-{
-    public VotoDb(DbContextOptions<VotoDb> options) : base(options) { 
-        Database.EnsureCreated();
-    }
-
-    public DbSet<Voto> Votos => Set<Voto>();
 }

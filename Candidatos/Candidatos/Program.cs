@@ -1,65 +1,78 @@
+using System.Data;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
         
 var builder = WebApplication.CreateBuilder(args);
+
+switch (builder.Environment.EnvironmentName)
+{
+    case "Development":
+        builder.Services.AddDbContext<CandidatosDb>(opt => opt.UseInMemoryDatabase("Candidatos"));
+        builder.Services.AddDatabaseDeveloperPageExceptionFilter();
+        break;
+    case "Homologation":
+        var connection = new SqliteConnection("DataSource=candidatos.db");
+        connection.Open();  
+        builder.Services.AddDbContext<CandidatosDb>(opt => opt.UseSqlite(connection));
+        break;
+    case "Production":
+    default:
+        throw new NotImplementedException();
+}
+
 var app = builder.Build();
 
-List<Candidato> _listaDeCandidatos = new List<Candidato>();
-_listaDeCandidatos.Add(new Candidato { Id = 1, Nombre = "Nahuel", Apellido = "Ferrero", Partido = "X" });
-
 var candidatos = app.MapGroup("/candidatos");
-int contador = 1;
 
-candidatos.MapGet("/", () => obtenerCandidatos(_listaDeCandidatos));
-candidatos.MapGet("/{id}", (int id) => obtenerCandidato(id, _listaDeCandidatos));
-candidatos.MapPost("/", (Candidato candidato) => crearCandidato(candidato, _listaDeCandidatos, ref contador));
-candidatos.MapDelete("/{id}", (int id) => eliminarCandidato(id, _listaDeCandidatos));
-candidatos.MapPut("/{id}", (int id, Candidato candidato) => modificarCandidato(id, _listaDeCandidatos, candidato));
+candidatos.MapGet("/",obtenerCandidatos);
+candidatos.MapGet("/{id}",obtenerCandidato);
+candidatos.MapPost("/", crearCandidato);
+candidatos.MapDelete("/{id}",eliminarCandidato);
+candidatos.MapPut("/{id}", modificarCandidato);
 
-static IResult obtenerCandidatos(List<Candidato> lista)
+static async Task<IResult> obtenerCandidatos(CandidatosDb db)
 {
-    return TypedResults.Ok(lista);
+    return TypedResults.Ok(await db.Candidatos.ToListAsync());
 }
-static IResult obtenerCandidato([FromRoute] int id, List<Candidato> lista)
+static async Task<IResult> obtenerCandidato([FromRoute] int id, CandidatosDb db)
 {
-    Candidato? candidato = lista.Find(c => c.Id == id);
+    Candidato? candidato = await db.Candidatos.FindAsync(id);
     if(candidato == null) return TypedResults.NotFound("Candidato no encontrado");
     else return TypedResults.Ok(candidato); 
 }
-static IResult crearCandidato([FromBody] Candidato candidato, List<Candidato> lista, ref int contador)
+static async Task<IResult> crearCandidato([FromBody] Candidato candidato, CandidatosDb db)
 {
-    contador++;
-    candidato.Id = contador;
-    lista.Add(candidato);
-    return TypedResults.Created("/candidatos/{candidato.id}",candidato);
+    db.Candidatos.Add(candidato);
+    await db.SaveChangesAsync();
+    return TypedResults.Created($"/candidatos/{candidato.Id}",candidato);
 }
-static IResult eliminarCandidato([FromRoute] int id, List<Candidato> lista)
+static async Task<IResult> eliminarCandidato([FromRoute] int id, CandidatosDb db)
 {
-    Candidato? candidato = lista.Find(c => c.Id == id);
+    Candidato? candidato = await db.Candidatos.FindAsync(id);
     if(candidato == null) return TypedResults.NotFound("Candidato no encontrado");
     else
     {
-        lista.Remove(candidato);
+        db.Candidatos.Remove(candidato);
+        await db.SaveChangesAsync();
         return TypedResults.Ok("Candidato Eliminado");
     }
 }
-static IResult modificarCandidato([FromRoute] int id, List<Candidato> lista, [FromBody]Candidato candidato)
+static async Task<IResult> modificarCandidato([FromRoute] int id, CandidatosDb db, [FromBody]Candidato candidato)
 {
-    Candidato? candidatoBuscado = lista.Find(c => c.Id == id);
+    Candidato? candidatoBuscado = await db.Candidatos.FindAsync(id);
     if(candidatoBuscado == null) return TypedResults.NotFound("Candidato no encontrado");
-    else
-    {
-        int indiceCandidato = lista.IndexOf(candidatoBuscado);
-        if(candidato.Nombre != null) lista[indiceCandidato].Nombre = candidato.Nombre;
-        if(candidato.Apellido != null) lista[indiceCandidato].Apellido = candidato.Apellido;
-        if(candidato.Partido != null) lista[indiceCandidato].Partido = candidato.Partido;
-        return TypedResults.Ok(candidatoBuscado);
-    }
+
+    if(candidato.Nombre != null) candidatoBuscado.Nombre = candidato.Nombre;
+    if(candidato.Apellido != null) candidatoBuscado.Apellido = candidato.Apellido;
+    if(candidato.Partido != null) candidatoBuscado.Partido = candidato.Partido;
+    return TypedResults.Ok(candidatoBuscado);
 }
     
 app.Run();  
 
 
-class Candidato
+public class Candidato
 {
     public int Id {get; set;}
     public string? Nombre {get; set;}
@@ -67,3 +80,11 @@ class Candidato
     public string? Partido {get; set;}
 }
 
+public class CandidatosDb : DbContext
+{
+    public CandidatosDb(DbContextOptions<CandidatosDb> options) : base(options) 
+    {
+        Database.EnsureCreated();
+    }
+    public DbSet<Candidato> Candidatos => Set<Candidato>();
+}

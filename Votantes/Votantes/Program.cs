@@ -1,68 +1,93 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Data.Sqlite;
+using Microsoft.EntityFrameworkCore;
         
 var builder = WebApplication.CreateBuilder(args);
-var app = builder.Build();
 
-List<Votante> _listaDeVotantes = new List<Votante>();
-_listaDeVotantes.Add(new Votante { Id = 1, Nombre = "Nahuel", Apellido = "Ferrero", Dni = 32591308 });
-
-var votantes = app.MapGroup("/votantes");
-int contador = 1;
-
-votantes.MapGet("/", () => obtenerVotantes(_listaDeVotantes));
-votantes.MapGet("/{id}", (int id) => obtenerVotante(id, _listaDeVotantes));
-votantes.MapPost("/", (Votante votante) => crearVotante(votante, _listaDeVotantes, ref contador));
-votantes.MapDelete("/{id}", (int id) => eliminarVotante(id, _listaDeVotantes));
-votantes.MapPut("/{id}", (int id, Votante votante) => modificarVotante(id, _listaDeVotantes, votante));
-
-static IResult obtenerVotantes(List<Votante> lista)
+switch (builder.Environment.EnvironmentName)
 {
-    return TypedResults.Ok(lista);
+    case "Development":
+        builder.Services.AddDbContext<VotantesDb>(opt => opt.UseInMemoryDatabase("Votantes"));
+        builder.Services.AddDatabaseDeveloperPageExceptionFilter();
+        break;
+    case "Homologation":
+        var connection = new SqliteConnection("DataSource=votantes.db");
+        connection.Open();  
+        builder.Services.AddDbContext<VotantesDb>(opt => opt.UseSqlite(connection));
+        break;
+    case "Production":
+    default:
+        throw new NotImplementedException();
 }
-static IResult obtenerVotante([FromRoute] int id, List<Votante> lista)
+
+var app = builder.Build();
+var votantes = app.MapGroup("/votantes");
+
+
+votantes.MapGet("/", obtenerVotantes);
+votantes.MapGet("/{id}", obtenerVotante);
+votantes.MapPost("/", crearVotante);
+votantes.MapDelete("/{id}",eliminarVotante);
+votantes.MapPut("/{id}",modificarVotante);
+
+
+static async Task<IResult> obtenerVotantes(VotantesDb db)
 {
-    Votante? votante = lista.Find(c => c.Id == id);
+    return TypedResults.Ok(await db.Votantes.ToListAsync());    
+}
+static async Task<IResult> obtenerVotante([FromRoute] int id, VotantesDb db)
+{
+    Votante? votante = await db.Votantes.FindAsync(id);
     if(votante == null) return TypedResults.NotFound("Votante no encontrado");
     else return TypedResults.Ok(votante); 
 }
-static IResult crearVotante([FromBody] Votante votante, List<Votante> lista, ref int contador)
+static async Task<IResult> crearVotante([FromBody] Votante votante, VotantesDb db)
 {
-    contador++;
-    votante.Id = contador;
-    lista.Add(votante);
-    return TypedResults.Created("/votantes/{votante.id}",votante);
+    db.Votantes.Add(votante);
+    await db.SaveChangesAsync();
+    return TypedResults.Created($"/votantes/{votante.Id}",votante);
 }
-static IResult eliminarVotante([FromRoute] int id, List<Votante> lista)
+static async Task<IResult> eliminarVotante([FromRoute] int id, VotantesDb db)
 {
-    Votante? votante = lista.Find(c => c.Id == id);
+    Votante? votante = await db.Votantes.FindAsync(id);
     if(votante == null) return TypedResults.NotFound("Votante no encontrado");
     else
     {
-        lista.Remove(votante);
+        db.Votantes.Remove(votante);
+        await db.SaveChangesAsync();
         return TypedResults.Ok("Votante Eliminado");
     }
 }
-static IResult modificarVotante([FromRoute] int id, List<Votante> lista, [FromBody] Votante votante)
+static async Task<IResult> modificarVotante([FromRoute] int id, VotantesDb db, [FromBody] Votante votante)
 {
-    Votante? votanteBuscado = lista.Find(c => c.Id == id);
+    Votante? votanteBuscado = await db.Votantes.FindAsync(id);
     if(votanteBuscado == null) return TypedResults.NotFound("Votante no encontrado");
-    else
-    {
-        int indiceVotante = lista.IndexOf(votanteBuscado);
-        if(votante.Nombre != null) lista[indiceVotante].Nombre = votante.Nombre;
-        if(votante.Apellido != null) lista[indiceVotante].Apellido = votante.Apellido;
-        if(votante.Dni != null) lista[indiceVotante].Dni = votante.Dni;
-        return TypedResults.Ok(votanteBuscado);
-    }
+    
+    if(votante.Nombre != null) votanteBuscado.Nombre = votante.Nombre;;
+    if(votante.Apellido != null) votanteBuscado.Apellido = votante.Apellido;
+    if(votante.Dni != null) votanteBuscado.Dni = votante.Dni;
+    if(votante.FechaNacimiento != null) votanteBuscado.FechaNacimiento = votante.FechaNacimiento;
+    return TypedResults.Ok(votanteBuscado);
 }
     
 app.Run();  
 
 
-class Votante
+public class Votante
 {
     public int Id {get; set;}
     public string? Nombre {get; set;}
     public string? Apellido {get; set;}
+    public string? FechaNacimiento {get; set;}
     public int? Dni {get; set;}
 }
+
+public class VotantesDb : DbContext
+{
+    public VotantesDb(DbContextOptions<VotantesDb> options) : base(options) 
+    {
+        Database.EnsureCreated();
+    }
+    public DbSet<Votante> Votantes => Set<Votante>();
+}
+
